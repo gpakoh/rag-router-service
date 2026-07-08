@@ -25,6 +25,48 @@ class LightRAGClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    async def query(
+        self,
+        workspace: str,
+        query_text: str,
+        top_k: int = 5,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "query": query_text,
+            "mode": "hybrid",
+            "top_k": top_k,
+        }
+
+        try:
+            resp = await self._client.post(
+                f"/api/v1/workspaces/{workspace}/query",
+                json=payload,
+            )
+        except httpx.TimeoutException as e:
+            raise LightRAGServiceError(
+                f"LightRAG query timeout: {e}", status_code=504
+            ) from e
+        except httpx.RequestError as e:
+            raise LightRAGServiceError(
+                f"LightRAG query unreachable: {e}", status_code=503
+            ) from e
+
+        if resp.status_code == 503:
+            body = _parse_body(resp)
+            message = _extract_message(body) or "LightRAG not initialized"
+            raise LightRAGServiceError(message, status_code=503)
+
+        if resp.status_code >= 400:
+            body = _parse_body(resp)
+            message = (
+                _extract_message(body) or f"LightRAG query failed: {resp.status_code}"
+            )
+            mapped = 502 if resp.status_code >= 500 else resp.status_code
+            raise LightRAGServiceError(message, status_code=mapped)
+
+        body = _parse_body(resp)
+        return body
+
     async def insert_text(
         self,
         workspace: str,
@@ -67,3 +109,12 @@ def _parse_body(resp: httpx.Response) -> dict[str, Any]:
         return resp.json()
     except Exception:
         return {"detail": resp.text}
+
+
+def _extract_message(body: dict[str, Any]) -> str | None:
+    detail = body.get("detail")
+    if isinstance(detail, dict):
+        msg = detail.get("message")
+        if msg:
+            return msg
+    return body.get("message")

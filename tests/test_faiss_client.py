@@ -100,3 +100,104 @@ async def test_upstream_500_maps_to_502(mock_respx, client):
     with pytest.raises(FaissServiceError) as exc:
         await client.rebuild("kojo")
     assert exc.value.status_code == 502
+
+
+# --- search ---
+
+
+@pytest.mark.asyncio
+async def test_search_returns_results(mock_respx, client):
+    mock_respx.post("/api/v1/search").respond(
+        200,
+        json={
+            "query": "RAG",
+            "top_k": 5,
+            "results": [
+                {
+                    "chunk": {
+                        "content_chunk_id": "c1",
+                        "source_file": "doc.pdf",
+                        "text": "RAG stands for...",
+                    },
+                    "score": 0.95,
+                }
+            ],
+            "total_time_ms": 3.2,
+        },
+    )
+    result = await client.search("kojo", "What is RAG?")
+    assert result["query"] == "RAG"
+    assert len(result["results"]) == 1
+    assert result["results"][0]["score"] == 0.95
+
+
+@pytest.mark.asyncio
+async def test_search_sends_top_k_and_chunk_profile(mock_respx, client):
+    route = mock_respx.post("/api/v1/search").respond(
+        200,
+        json={
+            "query": "q",
+            "top_k": 3,
+            "results": [],
+            "total_time_ms": 0.1,
+        },
+    )
+    await client.search("ws", "q", chunk_profile_id="custom", top_k=3)
+    import json
+
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["bot_id"] == "ws"
+    assert sent["chunk_profile_id"] == "custom"
+    assert sent["top_k"] == 3
+
+
+@pytest.mark.asyncio
+async def test_search_timeout_raises_504(mock_respx, client):
+    mock_respx.post("/api/v1/search").side_effect = httpx.TimeoutException("timed out")
+    with pytest.raises(FaissServiceError) as exc:
+        await client.search("kojo", "q")
+    assert exc.value.status_code == 504
+
+
+@pytest.mark.asyncio
+async def test_search_unavailable_raises_503(mock_respx, client):
+    mock_respx.post("/api/v1/search").side_effect = httpx.RequestError("refused")
+    with pytest.raises(FaissServiceError) as exc:
+        await client.search("kojo", "q")
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_search_503_maps_to_503(mock_respx, client):
+    mock_respx.post("/api/v1/search").respond(
+        503, json={"detail": "FAISS not initialized"}
+    )
+    with pytest.raises(FaissServiceError) as exc:
+        await client.search("kojo", "q")
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_search_404_maps_to_404(mock_respx, client):
+    mock_respx.post("/api/v1/search").respond(
+        404, json={"detail": "No index found for kojo/default"}
+    )
+    with pytest.raises(FaissServiceError) as exc:
+        await client.search("kojo", "q")
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_search_400_maps_to_400(mock_respx, client):
+    mock_respx.post("/api/v1/search").respond(400, json={"detail": "bad request"})
+    with pytest.raises(FaissServiceError) as exc:
+        await client.search("kojo", "q")
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_search_500_maps_to_502(mock_respx, client):
+    mock_respx.post("/api/v1/search").respond(500)
+    with pytest.raises(FaissServiceError) as exc:
+        await client.search("kojo", "q")
+    assert exc.value.status_code == 502

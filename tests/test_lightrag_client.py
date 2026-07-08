@@ -86,3 +86,98 @@ async def test_upstream_500_maps_to_502(mock_respx, client):
     with pytest.raises(LightRAGServiceError) as exc:
         await client.insert_text("kojo", "text")
     assert exc.value.status_code == 502
+
+
+# --- query ---
+
+
+@pytest.mark.asyncio
+async def test_query_returns_response(mock_respx, client):
+    mock_respx.post("/api/v1/workspaces/kojo/query").respond(
+        200,
+        json={
+            "status": "ok",
+            "response": "RAG is...",
+            "mode": "hybrid",
+            "workspace": "kojo",
+        },
+    )
+    result = await client.query("kojo", "What is RAG?")
+    assert result["response"] == "RAG is..."
+    assert result["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_query_sends_top_k(mock_respx, client):
+    route = mock_respx.post("/api/v1/workspaces/ws/query").respond(
+        200, json={"status": "ok", "response": "a"}
+    )
+    await client.query("ws", "q", top_k=3)
+    import json
+
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["top_k"] == 3
+    assert sent["mode"] == "hybrid"
+
+
+@pytest.mark.asyncio
+async def test_query_timeout_raises_504(mock_respx, client):
+    mock_respx.post(
+        "/api/v1/workspaces/kojo/query"
+    ).side_effect = httpx.TimeoutException("timed out")
+    with pytest.raises(LightRAGServiceError) as exc:
+        await client.query("kojo", "q")
+    assert exc.value.status_code == 504
+
+
+@pytest.mark.asyncio
+async def test_query_unavailable_raises_503(mock_respx, client):
+    mock_respx.post("/api/v1/workspaces/kojo/query").side_effect = httpx.RequestError(
+        "refused"
+    )
+    with pytest.raises(LightRAGServiceError) as exc:
+        await client.query("kojo", "q")
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_query_503_maps_to_503(mock_respx, client):
+    mock_respx.post("/api/v1/workspaces/kojo/query").respond(
+        503,
+        json={
+            "detail": {
+                "status": "error",
+                "error": "lightrag_not_initialized",
+                "message": "LightRAG not initialized for kojo",
+            }
+        },
+    )
+    with pytest.raises(LightRAGServiceError) as exc:
+        await client.query("kojo", "q")
+    assert exc.value.status_code == 503
+    assert "not initialized" in exc.value.message
+
+
+@pytest.mark.asyncio
+async def test_query_400_maps_to_400(mock_respx, client):
+    mock_respx.post("/api/v1/workspaces/kojo/query").respond(
+        400,
+        json={
+            "detail": {
+                "status": "error",
+                "error": "query_empty",
+                "message": "Query text is required",
+            }
+        },
+    )
+    with pytest.raises(LightRAGServiceError) as exc:
+        await client.query("kojo", "")
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_query_500_maps_to_502(mock_respx, client):
+    mock_respx.post("/api/v1/workspaces/kojo/query").respond(500)
+    with pytest.raises(LightRAGServiceError) as exc:
+        await client.query("kojo", "q")
+    assert exc.value.status_code == 502
