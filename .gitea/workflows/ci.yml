@@ -1,0 +1,28 @@
+name: rag-router-service CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: python311-ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: pip install ".[dev]"
+      - name: Ruff check
+        run: ruff check .
+      - name: Ruff format
+        run: ruff format --check .
+
+  test:
+    runs-on: python311-ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: pip install ".[dev]"
+      - name: Run tests
+        run: pytest -q
