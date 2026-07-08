@@ -12,6 +12,7 @@ from app.exceptions import (
     ParserError,
 )
 from app.models.upload import UploadResponse
+from app.services.faiss_client import FaissServiceError
 from app.services.lightrag_client import LightRAGServiceError
 from app.services.parser import parse_single_file_sync
 
@@ -19,11 +20,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["upload"])
 
-SUPPORTED_STRATEGIES = {"lightrag"}
+SUPPORTED_STRATEGIES = {"lightrag", "faiss"}
 
 
 def _get_clients(request: Request):
-    return request.app.state.file_security, request.app.state.lightrag
+    return (
+        request.app.state.file_security,
+        request.app.state.lightrag,
+        request.app.state.faiss,
+    )
 
 
 @router.post("/api/v1/upload/file")
@@ -53,7 +58,7 @@ async def upload_file(
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    fsec, lightrag = _get_clients(request)
+    fsec, lightrag, faiss = _get_clients(request)
 
     # step 1: security scan
     try:
@@ -94,22 +99,41 @@ async def upload_file(
             content={"status": "error", "message": str(e)},
         )
 
-    # step 3: insert into lightrag
-    try:
-        doc_id = await lightrag.insert_text(
-            workspace=tenant_id,
-            text=text,
-            source_file=file.filename,
-        )
-    except LightRAGServiceError as e:
-        return JSONResponse(
-            status_code=e.status_code,
-            content={"status": "error", "message": e.message},
-        )
+    # step 3: insert into backend
+    if strategy == "lightrag":
+        try:
+            doc_id = await lightrag.insert_text(
+                workspace=tenant_id,
+                text=text,
+                source_file=file.filename,
+            )
+        except LightRAGServiceError as e:
+            return JSONResponse(
+                status_code=e.status_code,
+                content={"status": "error", "message": e.message},
+            )
+    elif strategy == "faiss":
+        try:
+            result = await faiss.rebuild(
+                bot_id=tenant_id,
+            )
+            doc_id = _faiss_document_id(result)
+        except FaissServiceError as e:
+            return JSONResponse(
+                status_code=e.status_code,
+                content={"status": "error", "message": e.message},
+            )
 
     return UploadResponse(
         status="ok",
         tenant_id=tenant_id,
         strategy=strategy,
         document_id=doc_id,
+    )
+
+
+def _faiss_document_id(result: dict) -> str:
+    return result.get(
+        "index_path",
+        f"{result.get('bot_id', '?')}/{result.get('chunk_profile_id', '?')}",
     )
