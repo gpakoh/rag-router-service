@@ -12,17 +12,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: pip install ".[dev]"
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          pip install ".[dev]"
       - name: Ruff check
-        run: ruff check .
+        run: python3 -m ruff check .
       - name: Ruff format
-        run: ruff format --check .
+        run: python3 -m ruff format --check .
 
   test:
     runs-on: python311-ci
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: pip install ".[dev]"
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          pip install ".[dev]"
       - name: Run tests
-        run: pytest -q
+        run: python3 -m pytest -q
